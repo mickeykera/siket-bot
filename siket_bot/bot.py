@@ -1,6 +1,6 @@
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -823,12 +823,45 @@ async def cmd_admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
+# Bottom-left command menu
+# ---------------------------------------------------------------------------
+
+PUBLIC_COMMANDS = [
+    BotCommand("start", "Open the Siket Tutoring menu"),
+    BotCommand("cancel", "Cancel whatever you're doing"),
+]
+
+ADMIN_COMMANDS = PUBLIC_COMMANDS + [
+    BotCommand("admin", "Show admin command list"),
+    BotCommand("pending", "Tutor applications awaiting review"),
+    BotCommand("approve", "Approve a tutor application: /approve <id>"),
+    BotCommand("reject", "Reject a tutor application: /reject <id>"),
+    BotCommand("leads", "Recent parent enquiries"),
+    BotCommand("bookings", "Recent booking requests"),
+    BotCommand("tutors", "List all tutors"),
+]
+
+
+async def post_init(application: Application):
+    # Default menu — every user, everywhere.
+    await application.bot.set_my_commands(PUBLIC_COMMANDS, scope=BotCommandScopeDefault())
+    # Admin gets the extra management commands, but only in their own chat.
+    if ADMIN_CHAT_ID:
+        try:
+            await application.bot.set_my_commands(
+                ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=ADMIN_CHAT_ID)
+            )
+        except Exception:
+            logger.exception("Could not set admin command scope (has the admin messaged the bot yet?)")
+
+
+# ---------------------------------------------------------------------------
 # App wiring
 # ---------------------------------------------------------------------------
 
 def build_app() -> Application:
     db.init_db()
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel))
