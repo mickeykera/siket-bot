@@ -87,6 +87,13 @@ def init_db():
                 created_at TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bot_users (
+                chat_id INTEGER PRIMARY KEY,
+                role TEXT,
+                created_at TEXT
+            )
+        """)
         # Seed with the one live tutor from the website, if table is empty.
         row = conn.execute("SELECT COUNT(*) AS c FROM tutors").fetchone()
         if row["c"] == 0:
@@ -223,6 +230,39 @@ def list_recent_bookings(limit=10):
             FROM bookings LEFT JOIN tutors ON bookings.tutor_id = tutors.id
             ORDER BY bookings.id DESC LIMIT ?
         """, (limit,)).fetchall()
+
+
+# ---------- Bot users (role: 'parent' or 'tutor') ----------
+
+def set_user_role(chat_id, role):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO bot_users (chat_id, role, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET role = excluded.role",
+            (chat_id, role, now()),
+        )
+
+
+def get_user_role(chat_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT role FROM bot_users WHERE chat_id = ?", (chat_id,)).fetchone()
+        return row["role"] if row else None
+
+
+def get_latest_application_for_chat(chat_id):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM tutor_applications WHERE chat_id = ? ORDER BY id DESC LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+
+
+def get_tutor_by_chat(chat_id):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM tutors WHERE telegram_id = ? ORDER BY id DESC LIMIT 1",
+            (chat_id,),
+        ).fetchone()
 
 
 # ---------- Quiz leads ----------

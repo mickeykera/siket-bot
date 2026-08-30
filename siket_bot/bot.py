@@ -13,6 +13,7 @@ from telegram.ext import (
 )
 
 import db
+import site_api
 from config import (
     ADMIN_CHAT_ID,
     BOT_TOKEN,
@@ -38,31 +39,52 @@ logger = logging.getLogger("siket-bot")
 
 (
     TSIG_NAME, TSIG_EMAIL, TSIG_PHONE, TSIG_SUBJECTS, TSIG_MODE,
-    TSIG_EXPERIENCE, TSIG_RATE, TSIG_BIO,
-) = range(6, 14)
+    TSIG_EXPERIENCE, TSIG_RATE, TSIG_BIO, TSIG_CONFIRM,
+) = range(6, 15)
 
 (
     BOOK_NAME, BOOK_CONTACT, BOOK_TIME, BOOK_MESSAGE,
-) = range(14, 18)
+) = range(15, 19)
 
 (
     QUIZ_SUBJECT, QUIZ_BUDGET, QUIZ_MODE, QUIZ_STYLE,
-) = range(18, 22)
+) = range(19, 23)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def main_menu_kb():
+def role_choice_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👨‍👩‍👧 I'm a Parent / Student", callback_data="role:parent")],
+        [InlineKeyboardButton("🧑‍🏫 I'm a Tutor", callback_data="role:tutor")],
+    ])
+
+
+def parent_menu_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔍 Find a Tutor", callback_data="menu:find")],
         [InlineKeyboardButton("🎯 Take the Matching Quiz", callback_data="menu:quiz")],
         [InlineKeyboardButton("📝 Send an Enquiry", callback_data="menu:enquiry")],
-        [InlineKeyboardButton("🧑‍🏫 Become a Tutor", callback_data="menu:tutorsignup")],
         [InlineKeyboardButton("ℹ️ How It Works", callback_data="menu:howitworks")],
         [InlineKeyboardButton("📞 Contact Us", callback_data="menu:contact")],
+        [InlineKeyboardButton("🔁 Switch to Tutor view", callback_data="menu:switchrole")],
     ])
+
+
+def tutor_menu_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🧑‍🏫 Become a Tutor", callback_data="menu:tutorsignup")],
+        [InlineKeyboardButton("📋 My Application Status", callback_data="menu:mystatus")],
+        [InlineKeyboardButton("ℹ️ How It Works", callback_data="menu:howitworks")],
+        [InlineKeyboardButton("📞 Contact Us", callback_data="menu:contact")],
+        [InlineKeyboardButton("🔁 Switch to Parent view", callback_data="menu:switchrole")],
+    ])
+
+
+def dashboard_kb_for_role(role):
+    return tutor_menu_kb() if role == "tutor" else parent_menu_kb()
 
 
 def back_to_menu_kb():
@@ -106,8 +128,11 @@ WELCOME = (
     "👋 *Welcome to Siket Tutoring!*\n\n"
     "Find trusted, verified tutors in Ethiopia for Math, English, Physics, "
     "Amharic & more — personalised matching, local payments, and a free trial lesson.\n\n"
-    "What would you like to do?"
+    "Are you here as a parent/student, or a tutor?"
 )
+
+PARENT_DASHBOARD_TEXT = "👨‍👩‍👧 *Parent / Student Dashboard*\n\nWhat would you like to do?"
+TUTOR_DASHBOARD_TEXT = "🧑‍🏫 *Tutor Dashboard*\n\nWhat would you like to do?"
 
 HOW_IT_WORKS = (
     "*From search to first lesson in four simple steps:*\n\n"
@@ -126,7 +151,23 @@ CONTACT_TEXT = (
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text(WELCOME, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_kb())
+    chat_id = update.effective_chat.id
+    role = db.get_user_role(chat_id)
+    if role:
+        text = TUTOR_DASHBOARD_TEXT if role == "tutor" else PARENT_DASHBOARD_TEXT
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=dashboard_kb_for_role(role))
+    else:
+        await update.message.reply_text(WELCOME, parse_mode=ParseMode.MARKDOWN, reply_markup=role_choice_kb())
+
+
+async def role_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    role = query.data.split("role:", 1)[1]  # "parent" or "tutor"
+    chat_id = update.effective_chat.id
+    db.set_user_role(chat_id, role)
+    text = TUTOR_DASHBOARD_TEXT if role == "tutor" else PARENT_DASHBOARD_TEXT
+    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=dashboard_kb_for_role(role))
 
 
 async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,16 +175,57 @@ async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
+    chat_id = update.effective_chat.id
+    role = db.get_user_role(chat_id)
 
     if data == "menu:root":
         context.user_data.clear()
-        await query.edit_message_text(WELCOME, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_kb())
+        if role:
+            text = TUTOR_DASHBOARD_TEXT if role == "tutor" else PARENT_DASHBOARD_TEXT
+            await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=dashboard_kb_for_role(role))
+        else:
+            await query.edit_message_text(WELCOME, parse_mode=ParseMode.MARKDOWN, reply_markup=role_choice_kb())
+    elif data == "menu:switchrole":
+        context.user_data.clear()
+        await query.edit_message_text(
+            "Switch view — are you a parent/student, or a tutor?",
+            reply_markup=role_choice_kb(),
+        )
     elif data == "menu:howitworks":
         await query.edit_message_text(HOW_IT_WORKS, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_menu_kb())
     elif data == "menu:contact":
         await query.edit_message_text(CONTACT_TEXT, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_menu_kb())
     elif data == "menu:find":
         await show_subject_filter(query)
+    elif data == "menu:mystatus":
+        await show_application_status(query, chat_id)
+
+
+async def show_application_status(query, chat_id):
+    tutor = db.get_tutor_by_chat(chat_id)
+    if tutor:
+        await query.edit_message_text(
+            f"✅ You're live! Your profile *{tutor['name']}* is verified and visible to parents "
+            f"searching {tutor['subjects'].replace(',', ', ')}.",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_menu_kb(),
+        )
+        return
+    app = db.get_latest_application_for_chat(chat_id)
+    if not app:
+        await query.edit_message_text(
+            "You haven't submitted a tutor application yet.",
+            reply_markup=tutor_menu_kb(),
+        )
+        return
+    status_text = {
+        "pending": "⏳ Still under review — we'll notify you as soon as it's decided.",
+        "approved": "✅ Approved!",
+        "rejected": "❌ Not approved this time. Feel free to reach out via Contact Us for details.",
+    }.get(app["status"], app["status"])
+    await query.edit_message_text(
+        f"Application #{app['id']} — {status_text}",
+        reply_markup=back_to_menu_kb(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -272,9 +354,16 @@ async def enquiry_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Thanks! Your enquiry has been sent — we'll get back to you within one business day.",
         reply_markup=back_to_menu_kb(),
     )
+
+    dup = await site_api.check_duplicate(email=e["email"], phone=e["phone"])
+    dup_note = ""
+    if dup and dup.get("exists"):
+        role = dup.get("role") or "an"
+        dup_note = f"\n⚠️ *Note: matched an existing {role} account on the website.*"
+
     await notify_admin(
         context,
-        "📝 *New enquiry*\n"
+        f"📝 *New enquiry*{dup_note}\n"
         f"Name: {e['name']}\nEmail: {e['email']}\nPhone: {e['phone']}\n"
         f"Level: {e['level']}\nSubject: {e['subject']}\nMessage: {message}",
     )
@@ -388,29 +477,77 @@ async def tsig_rate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def tsig_bio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = context.user_data["tsig"]
-    bio = update.message.text.strip()
+    t["bio"] = update.message.text.strip()
     chat_id = update.effective_chat.id
+
+    dup = await site_api.check_duplicate(email=t["email"], phone=t["phone"])
+    if dup and dup.get("exists"):
+        role = dup.get("role") or "an"
+        matched_on = ", ".join(dup.get("matched_on", [])) or "your details"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Yes, continue anyway", callback_data="tsig:confirm:yes")],
+            [InlineKeyboardButton("❌ No, cancel", callback_data="tsig:confirm:no")],
+        ])
+        await update.message.reply_text(
+            f"⚠️ It looks like you may already have a *{role}* account on siketutoring.com.et "
+            f"(matched on {matched_on}). Submitting another application could create a duplicate.\n\n"
+            "Continue anyway, or cancel and log in on the website instead?",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=kb,
+        )
+        return TSIG_CONFIRM
+
+    await tsig_save(update, context, chat_id, duplicate_flag=False, via_callback=False)
+    return ConversationHandler.END
+
+
+async def tsig_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    choice = query.data.split("tsig:confirm:", 1)[1]
+    chat_id = update.effective_chat.id
+
+    if choice == "no":
+        context.user_data.pop("tsig", None)
+        await query.edit_message_text(
+            "No problem — head to siketutoring.com.et to log in to your existing account instead.",
+            reply_markup=back_to_menu_kb(),
+        )
+        return ConversationHandler.END
+
+    await tsig_save(update, context, chat_id, duplicate_flag=True, via_callback=True)
+    return ConversationHandler.END
+
+
+async def tsig_save(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id, duplicate_flag, via_callback):
+    t = context.user_data["tsig"]
     subjects_str = ",".join(sorted(t["subjects"]))
 
     app_id = db.add_tutor_application(
         chat_id, t["name"], t["email"], t["phone"], subjects_str, t["mode"],
-        t["experience"], t["rate"], bio,
+        t["experience"], t["rate"], t["bio"],
     )
-    await update.message.reply_text(
+    confirm_text = (
         "✅ Thanks! Your tutor profile has been submitted for verification. "
-        "We'll be in touch once it's approved.",
-        reply_markup=back_to_menu_kb(),
+        "We'll be in touch once it's approved."
+    )
+    if via_callback:
+        await update.callback_query.edit_message_text(confirm_text, reply_markup=back_to_menu_kb())
+    else:
+        await update.message.reply_text(confirm_text, reply_markup=back_to_menu_kb())
+
+    flag_note = (
+        "\n⚠️ *Possible existing account on the website — please double-check before approving.*"
+        if duplicate_flag else ""
     )
     await notify_admin(
         context,
-        f"🧑‍🏫 *New tutor application* (#{app_id})\n"
+        f"🧑‍🏫 *New tutor application* (#{app_id}){flag_note}\n"
         f"Name: {t['name']}\nEmail: {t['email']}\nPhone: {t['phone']}\n"
         f"Subjects: {subjects_str}\nMode: {t['mode']}\nExperience: {t['experience']} yrs\n"
-        f"Rate: ETB {t['rate']}/hr\nBio: {bio}\n\n"
+        f"Rate: ETB {t['rate']}/hr\nBio: {t['bio']}\n\n"
         f"Approve with /approve {app_id} or reject with /reject {app_id}",
     )
     context.user_data.pop("tsig", None)
-    return ConversationHandler.END
 
 
 # ---------------------------------------------------------------------------
@@ -703,8 +840,11 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("bookings", cmd_bookings))
     app.add_handler(CommandHandler("tutors", cmd_tutors))
 
-    # Static menu items (root, how it works, contact) + entry point for find-tutor
-    app.add_handler(CallbackQueryHandler(menu_router, pattern="^menu:(root|howitworks|contact|find)$"))
+    # Role selection + static menu items + entry point for find-tutor
+    app.add_handler(CallbackQueryHandler(role_chosen, pattern="^role:"))
+    app.add_handler(CallbackQueryHandler(
+        menu_router, pattern="^menu:(root|switchrole|howitworks|contact|find|mystatus)$"
+    ))
     app.add_handler(CallbackQueryHandler(find_subject_chosen, pattern="^find:subj:"))
     app.add_handler(CallbackQueryHandler(find_mode_chosen, pattern="^find:mode:"))
 
@@ -733,6 +873,7 @@ def build_app() -> Application:
             TSIG_EXPERIENCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tsig_experience)],
             TSIG_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tsig_rate)],
             TSIG_BIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, tsig_bio)],
+            TSIG_CONFIRM: [CallbackQueryHandler(tsig_confirm, pattern="^tsig:confirm:")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )

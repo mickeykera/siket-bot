@@ -38,7 +38,7 @@ BOT_TOKEN=<paste the token from BotFather>
 ADMIN_CHAT_ID=<your numeric Telegram user id>
 ```
 
-## 4. Run
+## 4. Run locally (optional, to test)
 
 ```bash
 python bot.py
@@ -46,11 +46,64 @@ python bot.py
 
 Open your bot in Telegram and send `/start`.
 
-To keep it running after you close your terminal, use `tmux`/`screen`, a
-systemd service, or deploy it to a small VPS / Railway / Render / Fly.io box
-that runs `python bot.py` continuously (or convert `run_polling()` to a
-webhook if you're already running a web server — see the python-telegram-bot
-docs for `run_webhook`).
+## 5. Deploy to Railway (keeps it running 24/7)
+
+This repo already includes a `Procfile` and `runtime.txt` so Railway can run
+it with no extra config.
+
+1. Push this folder to a new GitHub repo (drag-and-drop into a new repo on
+   github.com works fine if you don't use git on the command line).
+2. On [railway.app](https://railway.app), sign up, then **New Project →
+   Deploy from GitHub repo** and pick your repo.
+3. Railway will detect Python and install `requirements.txt` automatically.
+   Under the service's **Settings → Deploy**, make sure the start command
+   uses the `worker` process from the `Procfile` (Railway usually detects
+   this automatically since there's no web server listening on a port here).
+4. Go to the service's **Variables** tab and add:
+   - `BOT_TOKEN` — from BotFather
+   - `ADMIN_CHAT_ID` — your numeric Telegram id
+   (Do **not** upload `.env` — Railway's Variables tab replaces it, and
+   `.gitignore` already keeps `.env` out of git.)
+5. Railway redeploys automatically whenever variables change. Open
+   **Deployments → View Logs** and confirm you see `Siket Tutoring bot
+   starting…` with no errors.
+6. Message your bot on Telegram and send `/start` — it's now live 24/7.
+
+**Note on the database:** `siket.db` (SQLite) lives on Railway's ephemeral
+filesystem by default, which is fine to start but can reset on redeploy. Once
+you have real tutors/enquiries you care about keeping, ask me to switch
+storage to a Railway **Postgres** or **persistent volume** — it's a small
+change to `db.py`.
+
+## 6. Duplicate-check against the real website (optional)
+
+To warn when someone applying to tutor (or sending an enquiry) already has an
+account on siketutoring.com.et, the bot can call a small read-only endpoint
+on the Django app instead of connecting to the production database directly.
+
+1. Have your dev add the endpoint described in
+   `django_check_duplicate_snippet.py` to the Django `core` app (verify field
+   names against your real `models.py` first — see the warnings at the top
+   of that file).
+2. Set `BOT_API_KEY` on Render (the Django app) to a random secret.
+3. Set these two Railway variables on the bot to the same secret + your live URL:
+   - `SITE_API_URL=https://siketutoring.com.et/api/check-duplicate/`
+   - `SITE_API_KEY=<same value as BOT_API_KEY>`
+
+Until both variables are set, the bot works exactly as before — the
+duplicate check silently no-ops rather than blocking anyone.
+
+Once live:
+- **Tutor signup** — if a match is found, the applicant sees a warning and
+  must confirm before the application is submitted (flagged for you too).
+- **Enquiry form** — a match doesn't block the parent, but adds a note to
+  your admin notification so you know to check before following up.
+
+### Other hosting options
+The same `Procfile` approach works on **Render** (as a Background Worker,
+not a Web Service) or **Fly.io**. On a plain **VPS**, skip the Procfile and
+instead run `python bot.py` inside `tmux`/`screen`, or set it up as a
+systemd service so it restarts automatically on reboot/crash.
 
 ## What it does
 
