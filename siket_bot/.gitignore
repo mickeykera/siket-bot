@@ -1,0 +1,5 @@
+.env
+siket.db
+__pycache__/
+*.pyc
+venv/
